@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import Navbar from './components/Navbar'
 import Sidebar from './components/Sidebar'
 import AlertBanner from './components/AlertBanner'
@@ -13,6 +13,7 @@ import DataLogs from './components/DataLogs'
 import MissionReport from './components/MissionReport'
 import UltrasonicPanel from './components/UltrasonicPanel'
 import RoverController from './components/RoverController'
+import VisionPanel from './components/VisionPanel'
 import { useAlertSound } from './hooks/useAlertSound'
 import { useSensorData } from './hooks/useSensorData'
 
@@ -59,6 +60,7 @@ export default function App() {
   const missionTime = useMissionTimer()
   const [camDetections, setCamDetections] = useState({})
   const { triggerAlert } = useAlertSound()
+  const videoRef = useRef(null)
 
   const mergedSensor = current ? { ...current, ...camDetections } : null
 
@@ -121,10 +123,13 @@ export default function App() {
           {activeTab === 'camera' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="lg:col-span-2">
-                <CameraFeed onDetection={setCamDetections} />
+                <CameraFeed onDetection={setCamDetections} videoRef={videoRef} />
               </div>
               <UltrasonicPanel data={mergedSensor} />
               <AIDetectionPanel data={mergedSensor} />
+              <div className="lg:col-span-2">
+                <VisionPanel videoRef={videoRef} />
+              </div>
             </div>
           )}
 

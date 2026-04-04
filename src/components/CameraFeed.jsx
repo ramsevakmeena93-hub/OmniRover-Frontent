@@ -3,8 +3,9 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 const WS_URL = 'ws://localhost:5001/ws'
 const FRAME_INTERVAL = 100 // 10fps to backend
 
-export default function CameraFeed({ onDetection }) {
-  const videoRef  = useRef(null)
+export default function CameraFeed({ onDetection, videoRef: externalVideoRef }) {
+  const internalVideoRef = useRef(null)
+  const videoRef = externalVideoRef || internalVideoRef
   const canvasRef = useRef(null)
   const wsRef     = useRef(null)
   const streamRef = useRef(null)
