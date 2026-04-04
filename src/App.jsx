@@ -44,11 +44,16 @@ function LoadingScreen() {
   return (
     <div className="flex flex-col items-center justify-center h-screen bg-army-dark gap-4">
       <div className="text-army-accent text-4xl font-bold tracking-widest" style={{fontFamily:'Rajdhani,sans-serif'}}>OmniRover</div>
-      <div className="text-gray-500 text-xs font-mono tracking-widest">CONNECTING TO MISSION SERVER...</div>
+      <div className="text-gray-500 text-xs font-mono tracking-widest">WAITING FOR ESP32 ROVER...</div>
+      <div className="text-gray-700 text-xs font-mono mt-1">Make sure ESP32 is powered and on same WiFi</div>
       <div className="flex gap-1 mt-2">
         {[0,1,2].map(i => (
           <div key={i} className="w-2 h-2 rounded-full bg-army-accent animate-bounce" style={{animationDelay:`${i*0.15}s`}}></div>
         ))}
+      </div>
+      <div className="mt-4 text-xs font-mono text-gray-700 border border-gray-800 rounded px-4 py-2 text-center">
+        Server: <span className="text-army-accent">http://localhost:5000</span><br/>
+        ESP32 connects to: <span className="text-army-accent">ws://10.222.71.222:5000/hardware</span>
       </div>
     </div>
   )
@@ -78,7 +83,7 @@ export default function App() {
     camDetections?.smokeDetected, camDetections?.gasDetected, mergedSensor?.debrisDetected,
   ])
 
-  if (!current) return <LoadingScreen />
+  if (!current || current.temperature === undefined) return <LoadingScreen />
 
   const tempStatus = getSensorStatus(current.temperature, 35, 40)
   const gasStatus  = getSensorStatus(current.gas, 200, 300)

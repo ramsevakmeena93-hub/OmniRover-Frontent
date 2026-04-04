@@ -1,20 +1,23 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 
 const WS_URL = 'ws://localhost:5001/ws'
-const FRAME_INTERVAL = 100 // 10fps to backend
+const FRAME_INTERVAL = 100
 
 export default function CameraFeed({ onDetection, videoRef: externalVideoRef }) {
   const internalVideoRef = useRef(null)
   const videoRef = externalVideoRef || internalVideoRef
-  const canvasRef = useRef(null)
-  const wsRef     = useRef(null)
-  const streamRef = useRef(null)
-  const rafRef    = useRef(null)
-  const frameTimer = useRef(null)
-  const boxesRef  = useRef([])
-  const audioCtx  = useRef(null)
+  const canvasRef   = useRef(null)
+  const wsRef       = useRef(null)
+  const streamRef   = useRef(null)
+  const rafRef      = useRef(null)
+  const frameTimer  = useRef(null)
+  const imgRef      = useRef(null) // for IP webcam img element
+  const boxesRef    = useRef([])
+  const audioCtx    = useRef(null)
 
-  const [status,     setStatus]     = useState('idle')   // idle | active | error
+  const [mode,       setMode]       = useState('laptop')  // 'laptop' | 'ipwebcam'
+  const [ipUrl,      setIpUrl]      = useState('192.168.1.')
+  const [status,     setStatus]     = useState('idle')
   const [wsStatus,   setWsStatus]   = useState('offline')
   const [detections, setDetections] = useState([])
   const [risk,       setRisk]       = useState('SAFE')
@@ -153,20 +156,31 @@ export default function CameraFeed({ onDetection, videoRef: externalVideoRef }) 
     }
   }, [onDetection, playAlert])
 
-  // Frame sender — larger size for better fire detection
-  const startFrameSender = useCallback(() => {
-    const video  = videoRef.current
-    const canvas = document.createElement('canvas')
-    canvas.width = 480; canvas.height = 360  // larger = better fire detection
+  // Frame sender — captures from video or IP webcam img
+  const startFrameSender = useCallback((sourceMode, phoneIp) => {
+    const captureCanvas = document.createElement('canvas')
+    captureCanvas.width = 480; captureCanvas.height = 360
 
     frameTimer.current = setInterval(() => {
-      if (!video || video.readyState < 2 || wsRef.current?.readyState !== 1) return
-      const ctx = canvas.getContext('2d')
-      ctx.drawImage(video, 0, 0, 320, 240)
-      const b64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1]
+      if (wsRef.current?.readyState !== 1) return
+      const ctx = captureCanvas.getContext('2d')
+
+      if (sourceMode === 'ipwebcam' && imgRef.current) {
+        // Draw from IP webcam img element
+        try {
+          ctx.drawImage(imgRef.current, 0, 0, 480, 360)
+        } catch { return }
+      } else {
+        // Draw from laptop camera video
+        const video = videoRef.current
+        if (!video || video.readyState < 2) return
+        ctx.drawImage(video, 0, 0, 480, 360)
+      }
+
+      const b64 = captureCanvas.toDataURL('image/jpeg', 0.6).split(',')[1]
       wsRef.current.send(JSON.stringify({ type: 'frame', image: b64 }))
     }, FRAME_INTERVAL)
-  }, [])
+  }, [videoRef])
 
   const startCamera = useCallback(async () => {
     try {
@@ -177,19 +191,84 @@ export default function CameraFeed({ onDetection, videoRef: externalVideoRef }) 
       setStatus('active')
       connectWS()
       startDraw()
-      startFrameSender()
+      startFrameSender('laptop')
     } catch (err) {
       console.error('[CAM]', err)
       setStatus('error')
     }
   }, [connectWS, startDraw, startFrameSender])
 
+  // IP Webcam mode — phone camera via IP Webcam app
+  const startIPWebcam = useCallback(() => {
+    const baseUrl = `http://${ipUrl}:8080`
+    // Create hidden img that refreshes from IP webcam MJPEG stream
+    const img = new window.Image()
+    img.crossOrigin = 'anonymous'
+    imgRef.current = img
+
+    // Test connection first
+    const testImg = new window.Image()
+    testImg.onload = () => {
+      setStatus('active')
+      connectWS()
+
+      // Draw loop using IP webcam snapshot endpoint
+      const canvas = canvasRef.current
+      const drawLoop = () => {
+        if (!canvas) return
+        const W = 640, H = 480
+        canvas.width = W; canvas.height = H
+        const ctx = canvas.getContext('2d')
+
+        const snap = new window.Image()
+        snap.crossOrigin = 'anonymous'
+        snap.onload = () => {
+          ctx.drawImage(snap, 0, 0, W, H)
+          imgRef.current = snap
+
+          // Boxes
+          boxesRef.current.forEach(d => {
+            const x1=d.bbox[0], y1=d.bbox[1], x2=d.bbox[2], y2=d.bbox[3]
+            const color = d.color || '#00ff88'
+            ctx.strokeStyle = color; ctx.lineWidth = 2.5
+            ctx.strokeRect(x1, y1, x2-x1, y2-y1)
+            const label = `${d.class.toUpperCase()} ${(d.confidence*100).toFixed(0)}%`
+            ctx.font = 'bold 13px monospace'
+            const tw = ctx.measureText(label).width
+            ctx.fillStyle = color+'dd'; ctx.fillRect(x1, y1-24, tw+10, 22)
+            ctx.fillStyle = '#fff'; ctx.fillText(label, x1+5, y1-6)
+          })
+
+          // HUD
+          ctx.fillStyle='rgba(0,255,136,0.6)'; ctx.font='9px monospace'
+          ctx.fillText(new Date().toLocaleTimeString('en-IN',{hour12:false}), 6, H-6)
+          ctx.fillText(`OmniRover | IP CAM`, W-110, H-6)
+
+          fpsCount.current++
+          const now = Date.now()
+          if (now - fpsTimer.current >= 1000) { setFps(fpsCount.current); fpsCount.current=0; fpsTimer.current=now }
+        }
+        snap.src = `${baseUrl}/shot.jpg?t=${Date.now()}`
+        rafRef.current = setTimeout(drawLoop, 100)
+      }
+      drawLoop()
+      startFrameSender('ipwebcam')
+    }
+    testImg.onerror = () => {
+      setStatus('error')
+      alert(`Cannot connect to IP Webcam at ${baseUrl}\nMake sure:\n1. IP Webcam app is running on phone\n2. Phone and laptop on same WiFi\n3. IP address is correct`)
+    }
+    testImg.src = `${baseUrl}/shot.jpg?t=${Date.now()}`
+  }, [ipUrl, connectWS, startFrameSender])
+
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
+    clearTimeout(rafRef.current)
     clearInterval(frameTimer.current)
     wsRef.current?.close()
     streamRef.current?.getTracks().forEach(t => t.stop())
     streamRef.current = null
+    imgRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
     boxesRef.current = []
     setStatus('idle')
@@ -227,7 +306,7 @@ export default function CameraFeed({ onDetection, videoRef: externalVideoRef }) 
           </span>
           {status === 'active'
             ? <button onClick={stopCamera} className="text-xs px-3 py-1 rounded border border-red-500/40 text-red-400 font-mono hover:bg-red-500/10 transition-colors">■ STOP</button>
-            : <button onClick={startCamera} className="text-xs px-3 py-1 rounded border border-army-accent/40 text-army-accent font-mono hover:bg-army-accent/10 transition-colors">▶ START</button>
+            : <button onClick={mode === 'ipwebcam' ? startIPWebcam : startCamera} className="text-xs px-3 py-1 rounded border border-army-accent/40 text-army-accent font-mono hover:bg-army-accent/10 transition-colors">▶ START</button>
           }
         </div>
       </div>
@@ -242,9 +321,47 @@ export default function CameraFeed({ onDetection, videoRef: externalVideoRef }) 
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-army-dark">
               <div className="text-5xl">📷</div>
               <div className="text-xs font-mono text-gray-500 tracking-widest">CAMERA OFFLINE</div>
-              <button onClick={startCamera} className="text-sm px-6 py-2 rounded border border-army-accent/50 text-army-accent font-mono hover:bg-army-accent/10 transition-colors">
-                ▶ ACTIVATE CAMERA
+
+              {/* Mode selector */}
+              <div className="flex gap-2">
+                <button onClick={() => setMode('laptop')}
+                  className="text-xs px-4 py-2 rounded border font-mono transition-colors"
+                  style={{ borderColor: mode==='laptop'?'#00ff88':'#374151', color: mode==='laptop'?'#00ff88':'#6b7280', background: mode==='laptop'?'rgba(0,255,136,0.1)':'transparent' }}>
+                  💻 LAPTOP CAM
+                </button>
+                <button onClick={() => setMode('ipwebcam')}
+                  className="text-xs px-4 py-2 rounded border font-mono transition-colors"
+                  style={{ borderColor: mode==='ipwebcam'?'#00ff88':'#374151', color: mode==='ipwebcam'?'#00ff88':'#6b7280', background: mode==='ipwebcam'?'rgba(0,255,136,0.1)':'transparent' }}>
+                  📱 PHONE CAM
+                </button>
+              </div>
+
+              {/* IP input for phone mode */}
+              {mode === 'ipwebcam' && (
+                <div className="flex flex-col items-center gap-2 w-full px-8">
+                  <div className="text-xs font-mono text-gray-500">Enter phone IP (from IP Webcam app)</div>
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs font-mono text-gray-600">http://</span>
+                    <input
+                      value={ipUrl}
+                      onChange={e => setIpUrl(e.target.value)}
+                      placeholder="192.168.1.5"
+                      className="text-xs font-mono bg-transparent border border-gray-700 rounded px-2 py-1 text-army-accent w-36 text-center"
+                    />
+                    <span className="text-xs font-mono text-gray-600">:8080</span>
+                  </div>
+                  <div className="text-xs font-mono text-gray-700 text-center">
+                    Install "IP Webcam" app → Start server → copy IP shown
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={mode === 'ipwebcam' ? startIPWebcam : startCamera}
+                className="text-sm px-6 py-2 rounded border border-army-accent/50 text-army-accent font-mono hover:bg-army-accent/10 transition-colors">
+                ▶ ACTIVATE {mode === 'ipwebcam' ? 'PHONE' : 'LAPTOP'} CAMERA
               </button>
+
               {wsStatus === 'offline' && (
                 <div className="text-xs font-mono text-yellow-500 text-center px-4">
                   Start YOLO: <span className="text-army-accent">cd server/yolo && python app.py</span>

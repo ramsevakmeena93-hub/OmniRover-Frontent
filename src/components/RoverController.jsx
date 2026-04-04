@@ -16,20 +16,40 @@ const C = { accent:"#00ff88", danger:"#ff2d2d", warn:"#ffaa00", blue:"#0ea5e9", 
 export default function RoverController({ sensorData }) {
   const [mode, setMode] = useState("MANUAL")
   const [cmd, setCmd] = useState("STOP")
-  const [speed, setSpeed] = useState(60)
+  const [speed, setSpeed] = useState(100) // Changed default speed to 100
   const [camAngle, setCamAngle] = useState(90)
   const [lights, setLights] = useState(false)
   const [horn, setHorn] = useState(false)
   const [log, setLog] = useState([])
   const [step, setStep] = useState(0)
   const timerRef = useRef(null)
-  const stepRef = useRef(0)
+  
+  const sensorRef = useRef(sensorData)
+  useEffect(() => { sensorRef.current = sensorData }, [sensorData])
+  const autoState = useRef({ phase: "DRIVING", distLeft: 0, distRight: 0, label: "OBSTACLE AVOIDANCE ACTIVE" })
+  const [autoStatus, setAutoStatus] = useState("OBSTACLE AVOIDANCE ACTIVE")
 
   const send = useCallback((c, src="btn") => {
     setCmd(c)
     const t = new Date().toLocaleTimeString("en-IN", { hour12: false })
     setLog(l => [{ c, speed, src, t }, ...l].slice(0, 25))
-  }, [speed])
+
+    const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000'
+    fetch(`${API_URL}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: c, speed, angle: camAngle })
+    }).catch(err => console.error("Control API Error:", err))
+  }, [speed, camAngle])
+
+  useEffect(() => {
+    const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000'
+    fetch(`${API_URL}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: mode === "MANUAL" ? cmd : "NONE", speed, angle: camAngle })
+    }).catch(err => console.error("Control API Error:", err))
+  }, [camAngle])
 
   useEffect(() => {
     if (mode !== "MANUAL") return
@@ -41,18 +61,96 @@ export default function RoverController({ sensorData }) {
   }, [mode, send])
 
   useEffect(() => {
-    if (mode !== "AUTO") { clearTimeout(timerRef.current); return }
-    const run = () => {
-      const front = sensorData?.ultrasonic1 ?? sensorData?.distance ?? 999
-      const s = PATROL[stepRef.current % PATROL.length]
-      if (s.cmd === "FORWARD" && front < 45) {
-        send("BACKWARD","auto"); setTimeout(() => { send("RIGHT","auto"); setTimeout(run,700) }, 500); return
-      }
-      send(s.cmd,"auto"); setStep(stepRef.current % PATROL.length); stepRef.current++
-      timerRef.current = setTimeout(run, s.ms)
+    if (mode !== "AUTO") {
+      clearTimeout(timerRef.current)
+      autoState.current.phase = "DRIVING"
+      return
     }
-    run(); return () => clearTimeout(timerRef.current)
-  }, [mode])
+    
+    const run = () => {
+      const data = sensorRef.current
+      const frontDist = data?.ultrasonic1 ?? data?.distance ?? 999
+      let nextDelay = 150
+      
+      switch (autoState.current.phase) {
+        case "DRIVING":
+          if (frontDist < 40) {
+            send("STOP", "auto")
+            autoState.current.phase = "LOOK_LEFT"
+            autoState.current.label = "OBSTACLE! SCANNING LEFT..."
+            nextDelay = 200 // Faster stop
+          } else {
+            send("FORWARD", "auto")
+            autoState.current.label = "DRIVING FORWARD"
+            if (camAngle !== 90) setCamAngle(90) // Only center if not already
+            nextDelay = 150 // Rapid forward loop
+          }
+          break
+          
+        case "LOOK_LEFT":
+          setCamAngle(180) // Look left
+          autoState.current.phase = "READ_LEFT"
+          nextDelay = 400 // Wait for fast servo & sensor sync
+          break
+
+        case "READ_LEFT":
+          autoState.current.distLeft = frontDist
+          setCamAngle(0) // Look right
+          autoState.current.phase = "READ_RIGHT"
+          autoState.current.label = "SCANNING RIGHT..."
+          nextDelay = 400
+          break
+
+        case "READ_RIGHT":
+          autoState.current.distRight = frontDist
+          setCamAngle(90) // Center
+          autoState.current.phase = "DECIDE"
+          autoState.current.label = "DECIDING ROUTE..."
+          nextDelay = 250
+          break
+
+        case "DECIDE":
+          const { distLeft, distRight } = autoState.current
+          if (distLeft < 30 && distRight < 30) {
+            send("BACKWARD", "auto")
+            autoState.current.phase = "BACKING_UP"
+            autoState.current.label = "BLOCKED! REVERSING..."
+            nextDelay = 500
+          } else if (distLeft > distRight) {
+            send("LEFT", "auto")
+            autoState.current.phase = "TURNING"
+            autoState.current.label = "TURNING LEFT..."
+            nextDelay = 350
+          } else {
+            send("RIGHT", "auto")
+            autoState.current.phase = "TURNING"
+            autoState.current.label = "TURNING RIGHT..."
+            nextDelay = 350
+          }
+          break
+
+        case "BACKING_UP":
+          send("RIGHT", "auto")
+          autoState.current.phase = "TURNING"
+          autoState.current.label = "REPOSITIONING..."
+          nextDelay = 400
+          break
+
+        case "TURNING":
+          send("STOP", "auto")
+          autoState.current.phase = "DRIVING"
+          autoState.current.label = "OBSTACLE CLEARED"
+          nextDelay = 150
+          break
+      }
+      
+      setAutoStatus(autoState.current.label)
+      timerRef.current = setTimeout(run, nextDelay)
+    }
+    
+    run()
+    return () => clearTimeout(timerRef.current)
+  }, [mode, send, camAngle])
 
   const press = c => () => { if (mode === "MANUAL") send(c) }
   const release = () => { if (mode === "MANUAL") send("STOP") }
@@ -81,8 +179,8 @@ export default function RoverController({ sensorData }) {
           <div style={{ fontSize:10, color:"#4b5563", marginTop:2 }}>Tactical Autonomous Rescue Unit · GCS v2.1</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {[["🕹 MANUAL","MANUAL",C.accent],["🤖 AUTO PATROL","AUTO",C.warn],["⚠ E-STOP","STANDBY",C.danger]].map(([label,m,col])=>(
-            <button key={m} onClick={m==="STANDBY"?estop:()=>{stepRef.current=0;setMode(m);if(m==="MANUAL")send("STOP")}}
+          {[["🕹 MANUAL","MANUAL",C.accent],["🤖 AUTO EXPLORE","AUTO",C.warn],["⚠ E-STOP","STANDBY",C.danger]].map(([label,m,col])=>(
+            <button key={m} onClick={m==="STANDBY"?estop:()=>{setMode(m);if(m==="MANUAL")send("STOP")}}
               style={{ fontSize:11, padding:"7px 16px", borderRadius:6, border:`1.5px solid ${mode===m?col:C.border}`, color:mode===m?col:"#6b7280", background:mode===m?col+"18":"transparent", cursor:"pointer", fontWeight:"bold", letterSpacing:1, fontFamily:"monospace", boxShadow:mode===m?`0 0 12px ${col}44`:"none" }}>
               {label}
             </button>
@@ -91,7 +189,7 @@ export default function RoverController({ sensorData }) {
       </div>
 
       <div style={{ borderRadius:6, border:`1px solid ${modeColor}44`, background:modeColor+"0a", padding:"9px 16px", textAlign:"center", fontSize:11, fontWeight:"bold", letterSpacing:2, color:modeColor }}>
-        {mode==="AUTO" ? `🤖 AUTO PATROL · STEP ${step+1}/${PATROL.length} · ${PATROL[step]?.cmd} ${PATROL[step]?.icon} · OBSTACLE AVOIDANCE ACTIVE`
+        {mode==="AUTO" ? `🤖 AUTO EXPLORE · ${autoStatus}`
          : mode==="MANUAL" ? `🕹 MANUAL CONTROL · SPEED ${speed}% · CAMERA ${camAngle}° · LIGHTS ${lights?"ON":"OFF"}`
          : "⚠ STANDBY — EMERGENCY STOP ENGAGED · ALL MOTORS HALTED"}
       </div>
@@ -158,10 +256,12 @@ export default function RoverController({ sensorData }) {
               <span style={{ color:"#6b7280" }}>CAMERA PAN SERVO</span>
               <span style={{ color:C.blue, fontWeight:"bold" }}>{camAngle}°</span>
             </div>
-            <input type="range" min="0" max="180" step="5" value={camAngle} onChange={e=>setCamAngle(+e.target.value)} style={{ width:"100%", accentColor:C.blue }} />
-            <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, color:"#374151", marginTop:4 }}>
-              <span>LEFT 0°</span><span>CENTER 90°</span><span>RIGHT 180°</span>
+            <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
+              <button disabled={mode!=="MANUAL"} onClick={() => setCamAngle(a => Math.min(180, a + 15))} style={{ padding:"6px", borderRadius:6, border:`1.5px solid ${C.border}`, background: "transparent", color: "#6b7280", flex: 1, fontSize: 10, fontWeight: "bold", fontFamily: "monospace", cursor: mode==="MANUAL"?"pointer":"not-allowed" }}>◄ LEFT</button>
+              <button disabled={mode!=="MANUAL"} onClick={() => setCamAngle(90)} style={{ padding:"6px", borderRadius:6, border:`1.5px solid ${C.border}`, background: "transparent", color: "#6b7280", flex: 1, fontSize: 10, fontWeight: "bold", fontFamily: "monospace", cursor: mode==="MANUAL"?"pointer":"not-allowed" }}>CENTER</button>
+              <button disabled={mode!=="MANUAL"} onClick={() => setCamAngle(a => Math.max(0, a - 15))} style={{ padding:"6px", borderRadius:6, border:`1.5px solid ${C.border}`, background: "transparent", color: "#6b7280", flex: 1, fontSize: 10, fontWeight: "bold", fontFamily: "monospace", cursor: mode==="MANUAL"?"pointer":"not-allowed" }}>RIGHT ►</button>
             </div>
+            <input type="range" min="0" max="180" step="5" value={camAngle} onChange={e=>setCamAngle(+e.target.value)} disabled={mode!=="MANUAL"} style={{ width:"100%", accentColor:C.blue }} />
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
             <button onClick={()=>setLights(l=>!l)} style={{ padding:"10px 8px", borderRadius:8, border:`1.5px solid ${lights?C.warn:C.border}`, color:lights?C.warn:"#6b7280", background:lights?C.warn+"18":"transparent", fontSize:11, fontWeight:"bold", cursor:"pointer", fontFamily:"monospace", boxShadow:lights?`0 0 8px ${C.warn}44`:"none" }}>
@@ -173,13 +273,9 @@ export default function RoverController({ sensorData }) {
           </div>
           {mode==="AUTO" && (
             <div style={{ background:"rgba(0,0,0,0.3)", borderRadius:8, border:`1px solid ${C.warn}33`, padding:12 }}>
-              <div style={{ fontSize:10, color:C.warn, marginBottom:8, letterSpacing:2 }}>PATROL SEQUENCE</div>
-              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                {PATROL.map((p,i)=>(
-                  <div key={i} style={{ width:30, height:30, borderRadius:4, border:`1px solid ${i===step?C.warn:C.border}`, background:i===step?C.warn+"22":i<step?C.accent+"11":"transparent", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:i===step?C.warn:i<step?C.accent+"66":"#374151" }}>
-                    {p.icon}
-                  </div>
-                ))}
+              <div style={{ fontSize:10, color:C.warn, marginBottom:8, letterSpacing:2 }}>AUTONOMOUS LOGIC STATE</div>
+              <div style={{ display:"flex", justifyContent:"center", fontWeight:"bold", color:C.warn, background:"rgba(255, 170, 0, 0.15)", padding:"12px", borderRadius:"6px" }}>
+                {autoStatus}
               </div>
             </div>
           )}

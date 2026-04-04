@@ -10,6 +10,7 @@ const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:5000'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 function getRiskLevel(data) {
+  if (!data.hardwareConnected) return 'OFFLINE'
   if (data.gas > 300 || data.temperature > 40 || data.distance < 50) return 'DANGER'
   if (data.gas > 200 || data.temperature > 35 || data.distance < 100) return 'WARNING'
   return 'SAFE'

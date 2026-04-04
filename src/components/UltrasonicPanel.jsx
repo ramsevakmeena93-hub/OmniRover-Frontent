@@ -1,27 +1,20 @@
 import React from 'react'
 
-function UltrasonicBar({ label, value, direction }) {
+function UltrasonicBar({ label, value, direction, noData }) {
   const max = 400
   const pct = Math.min(100, (value / max) * 100)
-  const status = value < 50 ? 'CRITICAL' : value < 80 ? 'WARNING' : value < 150 ? 'CAUTION' : 'CLEAR'
-  const color = value < 50 ? '#ff2d2d' : value < 80 ? '#ffaa00' : value < 150 ? '#ffd700' : '#00ff88'
+  const status = noData ? 'N/A' : value < 50 ? 'CRITICAL' : value < 80 ? 'WARNING' : value < 150 ? 'CAUTION' : 'CLEAR'
+  const color = noData ? '#374151' : value < 50 ? '#ff2d2d' : value < 80 ? '#ffaa00' : value < 150 ? '#ffd700' : '#00ff88'
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between text-xs font-mono">
         <span className="text-gray-500">{direction} {label}</span>
-        <span style={{ color }} className="font-bold">{value} cm</span>
+        <span style={{ color }} className="font-bold">{noData ? '-- cm' : `${value} cm`}</span>
       </div>
       <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
-        {/* Bar fills from right — closer = more filled = more danger */}
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{
-            width: `${100 - pct}%`,
-            background: color,
-            marginLeft: `${pct}%`,
-          }}
-        />
+        {!noData && <div className="h-full rounded-full transition-all duration-500"
+          style={{ width:`${100-pct}%`, background:color, marginLeft:`${pct}%` }} />}
       </div>
       <div className="text-xs font-mono text-right" style={{ color }}>{status}</div>
     </div>
@@ -29,11 +22,12 @@ function UltrasonicBar({ label, value, direction }) {
 }
 
 export default function UltrasonicPanel({ data }) {
-  const u1 = data?.ultrasonic1 ?? data?.distance ?? 200
-  const u2 = data?.ultrasonic2 ?? 200
-  const u3 = data?.ultrasonic3 ?? 200
-  const humanNearby = data?.humanNearby || (Math.min(u1, u2, u3) < 80)
-  const minDist = Math.min(u1, u2, u3)
+  const u1 = data?.ultrasonic1 ?? data?.distance ?? null
+  const u2 = data?.ultrasonic2 ?? null
+  const u3 = data?.ultrasonic3 ?? null
+  const hasData = u1 !== null
+  const humanNearby = data?.humanNearby || (u1 !== null && u1 < 80)
+  const minDist = Math.min(u1 ?? 400, u2 ?? 400, u3 ?? 400)
 
   return (
     <div className="bg-army-panel rounded-lg border border-army-border p-4 flex flex-col gap-3">
@@ -58,35 +52,35 @@ export default function UltrasonicPanel({ data }) {
 
           {/* Front sensor */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 text-center">
-            <div className="text-xs font-mono font-bold" style={{ color: u1 < 80 ? '#ff2d2d' : '#00ff88' }}>
-              {u1}cm
+            <div className="text-xs font-mono font-bold" style={{ color: u1 !== null && u1 < 80 ? '#ff2d2d' : '#00ff88' }}>
+              {u1 !== null ? `${u1}cm` : '--'}
             </div>
-            <div className="w-0.5 h-6 mx-auto" style={{ background: u1 < 80 ? '#ff2d2d' : '#00ff8844' }}></div>
+            <div className="w-0.5 h-6 mx-auto" style={{ background: u1 !== null && u1 < 80 ? '#ff2d2d' : '#00ff8844' }}></div>
           </div>
 
           {/* Left sensor */}
           <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-1">
-            <div className="text-xs font-mono font-bold" style={{ color: u2 < 80 ? '#ff2d2d' : '#00ff88' }}>
-              {u2}
+            <div className="text-xs font-mono font-bold" style={{ color: u2 !== null && u2 < 80 ? '#ff2d2d' : '#4b5563' }}>
+              {u2 !== null ? u2 : '--'}
             </div>
-            <div className="h-0.5 w-6" style={{ background: u2 < 80 ? '#ff2d2d' : '#00ff8844' }}></div>
+            <div className="h-0.5 w-6" style={{ background: u2 !== null && u2 < 80 ? '#ff2d2d' : '#1f2937' }}></div>
           </div>
 
           {/* Right sensor */}
           <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1 flex-row-reverse">
-            <div className="text-xs font-mono font-bold" style={{ color: u3 < 80 ? '#ff2d2d' : '#00ff88' }}>
-              {u3}
+            <div className="text-xs font-mono font-bold" style={{ color: u3 !== null && u3 < 80 ? '#ff2d2d' : '#4b5563' }}>
+              {u3 !== null ? u3 : '--'}
             </div>
-            <div className="h-0.5 w-6" style={{ background: u3 < 80 ? '#ff2d2d' : '#00ff8844' }}></div>
+            <div className="h-0.5 w-6" style={{ background: u3 !== null && u3 < 80 ? '#ff2d2d' : '#1f2937' }}></div>
           </div>
         </div>
       </div>
 
       {/* Bars */}
       <div className="flex flex-col gap-2">
-        <UltrasonicBar label="FRONT" value={u1} direction="↑" />
-        <UltrasonicBar label="LEFT"  value={u2} direction="←" />
-        <UltrasonicBar label="RIGHT" value={u3} direction="→" />
+        <UltrasonicBar label="FRONT" value={u1 ?? 400} direction="↑" noData={u1 === null} />
+        <UltrasonicBar label="LEFT"  value={u2 ?? 400} direction="←" noData={u2 === null} />
+        <UltrasonicBar label="RIGHT" value={u3 ?? 400} direction="→" noData={u3 === null} />
       </div>
 
       {/* Human detection fusion */}
